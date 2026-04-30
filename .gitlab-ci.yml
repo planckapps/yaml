@@ -1,0 +1,57 @@
+#
+# Variables this template uses:
+#   ZIG_VERSION - which zig toolchain to install. Override at the
+#                 group or project level if you need a different one.
+
+variables:
+  ZIG_VERSION: "0.16.0"
+
+stages:
+  - test
+  - release
+
+.install_zig: &install_zig
+  - |
+    case "$(uname -s)-$(uname -m)" in
+      Linux-x86_64)   ZIG_ARCH="x86_64-linux" ;;
+      Linux-aarch64)  ZIG_ARCH="aarch64-linux" ;;
+      Darwin-arm64)   ZIG_ARCH="aarch64-macos" ;;
+      Darwin-x86_64)  ZIG_ARCH="x86_64-macos" ;;
+    esac
+    curl -sL "https://ziglang.org/builds/zig-${ZIG_ARCH}-${ZIG_VERSION}.tar.xz" | tar xJ
+    export PATH="$(pwd)/zig-${ZIG_ARCH}-${ZIG_VERSION}:$PATH"
+    zig version
+
+# ── Test ─────────────────────────────────────────────────────────
+# No `tags:` - picks up any Linux runner that can pull a Debian
+# image. On gitlab.com, the free shared-runner pool handles this
+# automatically. For a self-hosted GitLab, register at least one
+# runner with `docker` executor before this job can run.
+test:
+  stage: test
+  image: debian:bookworm-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl xz-utils
+    - *install_zig
+  script:
+    - zig build test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+
+# ── Release (tag push only) ──────────────────────────────────────
+# Creates a GitLab Release tied to the tag. The source archive URL
+# (auto-generated at `/-/archive/<tag>/<name>-<tag>.tar.gz`) is what
+# consumers pin in their `build.zig.zon`.
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - echo "Creating release for $CI_COMMIT_TAG"
+  release:
+    name: "Release $CI_COMMIT_TAG"
+    description: "Auto-generated release for $CI_COMMIT_TAG. Consume via zig fetch --save $CI_PROJECT_URL/-/archive/$CI_COMMIT_TAG/$CI_PROJECT_NAME-$CI_COMMIT_TAG.tar.gz"
+    tag_name: "$CI_COMMIT_TAG"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
